@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
-import { breakoutProps, type BreakoutProps } from "../lib/components/breakout"
+import { type BreakoutProps, breakoutProps } from "../lib/components/breakout"
 import {
-  breakoutPointProps,
   type BreakoutPointProps,
+  breakoutPointProps,
 } from "../lib/components/breakoutpoint"
 
 test("should parse breakout props with padding", () => {
@@ -15,6 +15,16 @@ test("should parse breakout props with padding", () => {
   const parsed = breakoutProps.parse(raw)
   expect(parsed.padding).toBe(1)
   expect(parsed.paddingLeft).toBe(2)
+})
+
+test("breakout accepts a fanout margin", () => {
+  expect(breakoutProps.parse({ fanoutMargin: "0.6mm" }).fanoutMargin).toBe(0.6)
+})
+
+test("breakout rejects a negative fanout margin", () => {
+  expect(() => breakoutProps.parse({ fanoutMargin: "-0.1mm" })).toThrow(
+    "Fanout margin cannot be negative",
+  )
 })
 
 test("breakout and fanout elements default to the fanout autorouter", () => {
