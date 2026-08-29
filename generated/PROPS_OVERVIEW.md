@@ -134,6 +134,15 @@ export interface AnalogVoltageSweepParameterProps
 }
 
 
+export interface AntennaProps extends CommonComponentProps {
+  /**
+   * Explicit antenna path. Entries use the same selector, point, and via
+   * syntax as trace pcbPath entries.
+   */
+  pcbPath?: PcbPath
+}
+
+
 export interface AssemblyDeviceProps {
   /** Product-level assembly identity. */
   name?: string
@@ -155,6 +164,8 @@ export interface AutorouterConfig {
     | /** @deprecated Use "sequential_trace" */ "sequential-trace"
   local?: boolean
   algorithmFn?: (simpleRouteJson: any) => Promise<any>
+  /** Override the solver used to place implicit breakout points. */
+  implicitBreakoutPointSolverFn?: ImplicitBreakoutPointSolverFn
   preset?:
     | "sequential_trace"
     | "subcircuit"
@@ -358,17 +369,46 @@ export interface BatteryProps<PinLabel extends string = string>
 }
 
 
+export interface BoardOutlinePoint extends Point {
+  /** Marks this outline point as the center of a castellated plated hole */
+  isCastellatedHole?: boolean
+  /** Diameter of the drilled hole. Required when `isCastellatedHole` is true. */
+  holeDiameter?: Distance
+  /** Diameter of the copper pad. Required when `isCastellatedHole` is true. */
+  padDiameter?: Distance
+  /** Connection target or targets for the castellated hole */
+  connectsTo?: string | string[]
+}
+
+
 export interface BoardProps
-  extends Omit<SubcircuitGroupProps, "subcircuit" | "connections"> {
+  extends Omit<SubcircuitGroupProps, "subcircuit" | "connections" | "outline"> {
   title?: string
   material?: "fr4" | "fr1" | "flex"
   /** Number of layers for the PCB */
   layers?: 1 | 2 | 4 | 6 | 8 | 10
+  /**
+   * Whether the autorouter may generate blind and buried vias. Defaults to
+   * false, which restricts newly generated vias to the full board stack.
+   */
+  allowBlindAndBuriedVias?: boolean
   borderRadius?: Distance
   thickness?: Distance
   boardAnchorPosition?: Point
   anchorAlignment?: z.infer<typeof ninePointAnchor>
   boardAnchorAlignment?: z.infer<typeof ninePointAnchor>
+  /**
+   * Points defining the board edge. Set `isCastellatedHole` on a point to
+   * place a castellated plated hole centered on that location.
+   *
+   * @example
+   * ```tsx
+   * { x: "-5mm", y: 0, isCastellatedHole: true,
+   *   holeDiameter: "0.8mm", padDiameter: "1.2mm",
+   *   connectsTo: "net.GND" }
+   * ```
+   */
+  outline?: BoardOutlinePoint[]
   /** Color applied to both top and bottom solder masks */
   solderMaskColor?: BoardColor
   /** Color of the top solder mask */
@@ -385,6 +425,11 @@ export interface BoardProps
   doubleSidedAssembly?: boolean
   /** Whether vias may be placed inside PCB pads */
   isViaInPadAllowed?: boolean
+  /**
+   * Whether implicit copper pours should be generated automatically. Defaults
+   * to false.
+   */
+  automaticPoursEnabled?: boolean
   /** Whether this board should be omitted from the schematic view */
   schematicDisabled?: boolean
 }
@@ -416,6 +461,11 @@ export interface BreakoutProps
   paddingRight?: Distance
   paddingTop?: Distance
   paddingBottom?: Distance
+  /**
+   * Minimum clearance between this fanout boundary and another fanout
+   * boundary. Fanout boundaries may never overlap, even when this is omitted.
+   */
+  fanoutMargin?: Distance
 }
 
 
@@ -433,6 +483,10 @@ export interface BusProps {
   pcbTraceWidth?: number | string
   /** PCB layers on which the bus may be routed. */
   pcbAllowedLayers?: LayerRefInput[]
+  /** Preferred PCB layer for routing the bus. */
+  preferredLayer?: LayerRefInput
+  /** Preferred PCB layers for routing the bus, in priority order. */
+  preferredLayers?: LayerRefInput[]
 }
 
 
@@ -466,6 +520,27 @@ export interface CadModelBase {
     x: number | string
     y: number | string
     z: number | string
+  }
+  /**
+   * Axis-aligned extent of the model measured in its own coordinate frame, the
+   * same frame as `modelOriginPosition`.
+   *
+   * `size` gives the extent but not where the box sits relative to the model
+   * origin, and the box is generally not centered on it, so `size` alone cannot
+   * say how much of the part is above the board. Since `modelOriginPosition` is
+   * the point placed on the board surface, these bounds supply the missing
+   * term. `modelBoardNormalDirection` names the axis (default `z+`): for a
+   * positive normal the outward reach is `max[axis] - origin[axis]`, and for a
+   * negative one it is `origin[axis] - min[axis]`.
+   *
+   * These are the model's own bounds, before `modelUnitToMmScale` or any
+   * object-fit scaling is applied.
+   *
+   * Whatever generates a part file already measures this to produce `size`.
+   */
+  modelBounds?: {
+    min: { x: number | string; y: number | string; z: number | string }
+    max: { x: number | string; y: number | string; z: number | string }
   }
   size?: { x: number | string; y: number | string; z: number | string }
   modelUnitToMmScale?: Distance
@@ -597,12 +672,6 @@ export interface CircleCutoutProps
   name?: string
   shape: "circle"
   radius: Distance
-}
-
-
-export interface CircleEnclosureCutoutApertureProps extends CircleShapeProps {
-  /** Additional clearance around the nominal opening. */
-  margin?: Distance
 }
 
 
@@ -776,9 +845,14 @@ export interface CommonLayoutProps {
 
 export interface ConnectorProps extends ChipPropsSU {
   /**
-   * Connector standard, e.g. usb_c, m2
+   * Connector interface or product family, e.g. usb_c, m2, jst_ph
    */
-  standard?: "usb_c" | "m2"
+  standard?: ConnectorStandard
+
+  /**
+   * Number of electrical circuits in the connector
+   */
+  pinCount?: number
 }
 
 
@@ -793,12 +867,17 @@ export interface CopperPourProps {
   name?: string
   layer: LayerRefInput
   connectsTo: string
+  /**
+   * Reserves the pour region during autorouting so unrelated traces do not
+   * split it. Vias may still cross the region using antipads.
+   */
   unbroken?: boolean
   padMargin?: Distance
   traceMargin?: Distance
   clearance?: Distance
   boardEdgeMargin?: Distance
   cutoutMargin?: Distance
+  useThermalReliefs?: boolean
   outline?: Point[]
   coveredWithSolderMask?: boolean
 }
@@ -857,6 +936,54 @@ export interface CustomDrcSelect {
 export interface CustomDrcSelectAll {
   (selector: `chip${string}`): SelectionResultComponent[]
   (selector: string): SelectionResult[]
+}
+
+
+export interface CutoutApertureProps {
+  /** Additional clearance around the nominal opening. */
+  margin?: Distance
+  /**
+   * Move the opening's **center** across the face it pierces, along the same two
+   * axes its `width` and `height` are measured in. Both may be negative.
+   *
+   * Sharing a frame with the dimensions is the point. These replace
+   * `zExtentAboveBoard`, which only made sense on the four walls: on the lid and
+   * the floor an opening does not move in Z at all, so a "Z extent" had no
+   * meaning there.
+   *
+   * Zero means "wherever the part puts it", which is usually right. On a side
+   * face the opening is centred on the part's body above the board, taken from
+   * the model's measured bounds, so it lines up with the connector without
+   * anyone computing a height. On the lid or the floor it is centred on the
+   * part's own position, and both offsets turn with the part.
+   *
+   * `heightDimensionOffset` runs **outward** from the mounting surface on a side
+   * face -- up for a top-mounted part, down for a bottom-mounted one -- so, like
+   * the default it shifts, it describes the part rather than where the part was
+   * placed. A negative value pulls the opening back toward and past the board,
+   * which is what a cable jacket fatter than its connector needs; the binding
+   * constraint is that the opening must not cut into the floor.
+   */
+  widthDimensionOffset?: Distance
+  /** See `widthDimensionOffset`. */
+  heightDimensionOffset?: Distance
+  /**
+   * How far the cutting tool continues inboard along the part's interaction
+   * axis, so the lid lip or other material behind the wall cannot obstruct it.
+   * On a side opening this axis may be oblique to X/Y; on the lid or floor it is
+   * vertical. The profile is cut as authored and never capped, so an explicitly
+   * excessive depth can reach the shell on the far side.
+   *
+   * Usually unnecessary: side depth is derived from the rotated CAD-body/PCB
+   * envelope. Horizontal depth uses the model's measured reach from the board
+   * and converts it to the cavity span beyond the plate's inner surface; where
+   * bounds are absent, `cadModel.size.z` is a less accurate fallback because it
+   * can include pins and through-board geometry.
+   *
+   * Set this where that envelope is wrong for the purpose -- for example a
+   * tapered body -- or where a part has no CAD model.
+   */
+  depth?: Distance
 }
 
 
@@ -959,12 +1086,46 @@ export interface EditTraceHintEvent extends BaseManualEditEvent {
 
 
 export interface EnclosureFdmBoxProps {
+  /** Stable enclosure identity. */
+  name?: string
   /** The name or selector of the board enclosed by this box. */
   boardRef: string
+  /** Optional outside X dimension; inferred from the board when omitted. */
   width?: Distance
+  /** Optional outside Y dimension; inferred from the board when omitted. */
   height?: Distance
+  /** Optional total outside Z dimension; inferred from the board stack. */
   depth?: Distance
+  /** Printed side-wall thickness. */
   wallThickness?: Distance
+  /** Base floor thickness. */
+  floorThickness?: Distance
+  /** Lid top-plate thickness. */
+  lidThickness?: Distance
+  /** Horizontal clearance between the board edge and inside wall. */
+  boardClearance?: Distance
+  /** Gap from the inside floor to the PCB bottom. */
+  standoffHeight?: Distance
+  /**
+   * Clearance from the PCB top surface up to the inside of the lid.
+   *
+   * This is measured from the *board*, not from the tallest component: only
+   * parts that declare an aperture report their height, so an arbitrary tall
+   * capacitor is invisible here and setting this does not guarantee it clears.
+   *
+   * Omit it and the depth is inferred instead -- grown until the lid and its lip
+   * clear every side-wall aperture, so a connector taller than the default
+   * cannot end up straddling the base/lid seam. Setting it explicitly opts out
+   * of that: the value is then taken literally, which is what allows a part to
+   * deliberately poke through the lid.
+   */
+  topHeadroom?: Distance
+  /** Depth of the friction-fit lid lip. */
+  lidLipDepth?: Distance
+  /** Disable placement of apertures explicitly declared by enclosed components. */
+  disableCutouts?: boolean
+  /** Show edges hidden behind the enclosure surface in compatible 3D viewers. */
+  showHiddenEdges?: boolean
 }
 
 
@@ -1012,8 +1173,14 @@ export interface FabricationNoteTextProps extends PcbLayoutProps {
 
 export interface FanoutProps {
   /**
-   * Fanout direction for each named bus. `center` leaves the direction
-   * unconstrained.
+   * Fanout direction and boundary position for each named bus. Prefer the
+   * edge-first names such as `rightside_top` and `topside_right` when selecting
+   * a corner region; their physical exit edges are unambiguous. All legacy
+   * NinePointAnchor names remain accepted unchanged and retain their
+   * destination-guided behavior. `center` leaves the direction unconstrained.
+   * Directions use board/circuit world coordinates. For a bus that terminates
+   * on a copper plane, the physical-edge prefix is ignored and only the
+   * position's local escape direction is used.
    */
   busFanoutDirections?: Record<BusName, BusFanoutDirection>
   /**
@@ -1095,6 +1262,26 @@ export interface FootprintProps {
    * makes the distinction easy to miss.
    */
   insertionDirection?: FootprintInsertionDirection
+  /**
+   * Direction the part's enclosure opening faces, named the same way as
+   * `insertionDirection` and in the same unrotated part frame.
+   *
+   * These are two different physical facts and a part may need both. A
+   * side-actuated switch is *installed* from above and *actuated* from the side:
+   * its aperture must pierce a side wall, while nothing is ever inserted into
+   * it. Reusing `insertionDirection` for that would either put the opening on
+   * the wrong face or overload a field documented as "the side exposing the
+   * receptacle where the cable is attached".
+   *
+   * Like `insertionDirection`, this is a property of the part, authored without
+   * regard to placement: rotating or flipping the component rotates it too, and
+   * `pcb_component.cutout_aperture_direction` reports the result in board
+   * coordinates.
+   *
+   * When absent, the aperture falls back to `insertionDirection`, which is
+   * correct for every connector -- a cable enters through the opening it needs.
+   */
+  cutoutApertureDirection?: FootprintInsertionDirection
 }
 
 
@@ -1139,6 +1326,81 @@ export interface HoleWithPolygonPadPlatedHoleProps
   portHints?: PortHints
   solderMaskMargin?: Distance
   coveredWithSolderMask?: boolean
+}
+
+
+export interface ImplicitBreakoutBounds {
+  readonly minX: number
+  readonly maxX: number
+  readonly minY: number
+  readonly maxY: number
+}
+
+
+export interface ImplicitBreakoutBus {
+  readonly busId: string
+  readonly connectionIds: readonly string[]
+  /** Ordered candidate layers that the solver may distribute this bus over. */
+  readonly targetLayers?: readonly string[]
+}
+
+
+export interface ImplicitBreakoutConnection {
+  readonly connectionId: string
+  readonly endpoints: readonly ImplicitBreakoutConnectionEndpoint[]
+}
+
+
+export interface ImplicitBreakoutConnectionEndpoint {
+  readonly regionId: string
+  readonly position: ImplicitBreakoutPoint
+  /**
+   * Optional PCB world-space routing destination, in millimeters, beyond this
+   * breakout region. A solver may use it to select and align a nearer edge.
+   */
+  readonly externalDestination?: ImplicitBreakoutPoint
+}
+
+
+export interface ImplicitBreakoutDifferentialPair {
+  readonly type: "differential"
+  readonly connections: readonly [
+    ImplicitBreakoutConnection,
+    ImplicitBreakoutConnection,
+  ]
+}
+
+
+export interface ImplicitBreakoutPoint {
+  readonly x: number
+  readonly y: number
+}
+
+
+export interface ImplicitBreakoutPointSolverInput {
+  readonly regions: readonly ImplicitBreakoutRegion[]
+  readonly connections: readonly ImplicitBreakoutConnectionOrDifferentialPair[]
+  readonly buses: readonly ImplicitBreakoutBus[]
+  readonly boundaryPointSpacing: number
+}
+
+
+export interface ImplicitBreakoutPointSolverOutput {
+  readonly breakoutPoints: readonly ImplicitBreakoutSolverPoint[]
+}
+
+
+export interface ImplicitBreakoutRegion {
+  readonly regionId: string
+  readonly bounds: ImplicitBreakoutBounds
+  readonly edge: ImplicitBreakoutEdge
+}
+
+
+export interface ImplicitBreakoutSolverPoint extends ImplicitBreakoutPoint {
+  readonly regionId: string
+  readonly connectionId: string
+  readonly layer: string
 }
 
 
@@ -1467,6 +1729,12 @@ export interface NetLabelProps {
   net?: string
   connection?: string
   connectsTo?: string | string[]
+  /**
+   * Render the net name along its schematic trace instead of as an anchored
+   * label. Inline placement is automatic, so schematic anchor positioning
+   * props are ignored.
+   */
+  inline?: boolean
   schX?: number | string
   schY?: number | string
   schRotation?: number | string
@@ -1535,8 +1803,13 @@ export interface PanelProps
    * If true, prevent a solder mask from being applied to this panel.
    */
   noSolderMask?: boolean
-  /** Method for panelization */
-  panelizationMethod?: "tab-routing" | "none"
+  /**
+   * Method used to separate boards in the panel.
+   *
+   * `outline_routing` creates continuous routed cutouts around each board
+   * outline without tabs.
+   */
+  panelizationMethod?: "tab-routing" | "outline_routing" | "none"
   /** Gap between boards in a panel */
   boardGap?: Distance
   layoutMode?: "grid" | "pack" | "none"
@@ -1689,6 +1962,13 @@ export interface PcbNoteTextProps extends PcbLayoutProps {
 }
 
 
+export interface PcbPathPoint extends Point {
+  via?: boolean
+  fromLayer?: LayerRefInput
+  toLayer?: LayerRefInput
+}
+
+
 export interface PcbRouteCache {
   pcbTraces: PcbTrace[]
   cacheKey: string
@@ -1716,12 +1996,6 @@ export interface PcbSxValue {
   pcbX?: string | number
   pcbY?: string | number
   visibility?: "hidden" | "visible" | "inherit"
-}
-
-
-export interface PillEnclosureCutoutApertureProps extends PillShapeProps {
-  /** Additional clearance around the nominal opening. */
-  margin?: Distance
 }
 
 
@@ -1854,6 +2128,27 @@ export interface PinHeaderProps extends CommonComponentProps {
    * Whether the header is male, female, or unpopulated
    */
   gender?: "male" | "female" | "unpopulated"
+
+  /**
+   * Mount the header on the top of the board, so it is connected to from
+   * above. An alias for `layer: "top"`, which is the default.
+   *
+   * Which side of the board a part sits on is `layer`, and only `layer`: the
+   * 3D model is always drawn top-side and consumers flip it for a bottom-layer
+   * component. Prefer these names on a connector, where "which side does the
+   * mating connector come from" is the question actually being asked.
+   */
+  connectsFromAbove?: boolean
+
+  /**
+   * Mount the header on the underside of the board, so it is connected to from
+   * below. An alias for `layer: "bottom"`.
+   *
+   * Not to be confused with `invert` on a footprint string, which installs a
+   * header BACKWARDS on whichever side it is on — long pins through the board
+   * rather than short ones.
+   */
+  connectsFromBelow?: boolean
 
   /**
    * Whether to show pin labels in silkscreen
@@ -2066,12 +2361,6 @@ export interface RectCutoutProps
 }
 
 
-export interface RectEnclosureCutoutApertureProps extends RectShapeProps {
-  /** Additional clearance around the nominal opening. */
-  margin?: Distance
-}
-
-
 export interface RectHoleProps extends PcbLayoutProps {
   name?: string
   shape: "rect"
@@ -2200,6 +2489,8 @@ export interface SchematicBoxProps {
   chipRef?: string
   pinLabels?: PinLabelsProp
   schPinArrangement?: SchematicPinArrangement
+  /** Per-pin schematic margin overrides keyed by pin number or label. */
+  schPinStyle?: SchematicPinStyle
   schX?: Distance
   schY?: Distance
   schSectionName?: string
@@ -2241,6 +2532,21 @@ export interface SchematicCircleProps {
   isFilled?: boolean
   fillColor?: string
   isDashed?: boolean
+}
+
+
+export interface SchematicGraphicProps {
+  /** URL or static-file import for the canonical source SVG asset. */
+  imageUrl?: string
+  /**
+   * Complete SVG markup, including its dimensions or viewBox. Used as the
+   * source when imageUrl is omitted, or as fallback content when both exist.
+   */
+  svgContent?: string
+  /** Optional rendered width of the graphic. */
+  width?: Distance
+  /** Optional rendered height of the graphic. */
+  height?: Distance
 }
 
 
@@ -2321,9 +2627,15 @@ export interface SchematicSectionProps {
 
 
 export interface SchematicSheetProps {
-  name: string
-  displayName: string
+  name?: string
+  displayName?: string
   sheetIndex?: number
+  /** Sheet size used to render the schematic. Defaults to A4. */
+  sheetSize?: SchematicSheetSize
+  /** Explicit schematic sheet width. Overrides the width from sheetSize. */
+  sheetWidth?: Distance
+  /** Explicit schematic sheet height. Overrides the height from sheetSize. */
+  sheetHeight?: Distance
   children?: any
 }
 
@@ -2503,15 +2815,19 @@ export interface SubcircuitGroupProps
 
   autorouter?: AutorouterProp
   autorouterEffortLevel?: "1x" | "2x" | "5x" | "10x" | "100x"
+  /**
+   * Selects the local autorouting pipeline. Unknown string values emit a
+   * warning and fall back to `latest`.
+   */
   autorouterVersion?:
-    | "v1"
-    | "v2"
-    | "v3"
-    | "v4"
-    | "v5"
-    | "v6"
+    | "beta_pipeline1"
+    | "beta_pipeline3"
+    | "beta_pipeline4"
+    | "beta_pipeline5"
+    | "beta_pipeline7"
     | "beta_pipeline9"
     | "latest"
+    | (string & {})
 
   /**
    * Serialized circuit JSON describing a precompiled subcircuit

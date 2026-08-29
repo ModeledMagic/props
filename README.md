@@ -29,6 +29,7 @@ resistorProps.parse({ resistance: "10k" } as ResistorPropsInput);
 | `<analogsimulation />`                  | [`AnalogSimulationProps`](#analogsimulationprops-analogsimulation)                                                 |
 | `<analog.sweepparameter />`             | [`AnalogResistanceSweepParameterProps`](#analogresistancesweepparameterprops-analogsweepparameter)                 |
 | `<analog.transientsimulation />`        | [`AnalogTransientSimulationProps`](#analogtransientsimulationprops-analogtransientsimulation)                      |
+| `<antenna />`                           | [`AntennaProps`](#antennaprops-antenna)                                                                            |
 | `<autoroutingphase />`                  | [`AutoroutingPhaseProps`](#autoroutingphaseprops-autoroutingphase)                                                 |
 | `<battery />`                           | [`BatteryProps`](#batteryprops-battery)                                                                            |
 | `<board />`                             | [`BoardProps`](#boardprops-board)                                                                                  |
@@ -95,6 +96,7 @@ resistorProps.parse({ resistance: "10k" } as ResistorPropsInput);
 | `<schematicbox />`                      | [`SchematicBoxProps`](#schematicboxprops-schematicbox)                                                             |
 | `<schematiccell />`                     | [`SchematicCellProps`](#schematiccellprops-schematiccell)                                                          |
 | `<schematiccircle />`                   | [`SchematicCircleProps`](#schematiccircleprops-schematiccircle)                                                    |
+| `<schematicgraphic />`                  | [`SchematicGraphicProps`](#schematicgraphicprops-schematicgraphic)                                                 |
 | `<schematicline />`                     | [`SchematicLineProps`](#schematiclineprops-schematicline)                                                          |
 | `<schematicpath />`                     | [`SchematicPathProps`](#schematicpathprops-schematicpath)                                                          |
 | `<schematicrect />`                     | [`SchematicRectProps`](#schematicrectprops-schematicrect)                                                          |
@@ -324,6 +326,20 @@ export interface AnalogTransientSimulationProps extends AnalogAnalysisSimulation
 
 [Source](https://github.com/tscircuit/props/blob/main/lib/components/analogtransientsimulation.ts)
 
+### AntennaProps `<antenna />`
+
+```ts
+export interface AntennaProps extends CommonComponentProps {
+  /**
+   * Explicit antenna path. Entries use the same selector, point, and via
+   * syntax as trace pcbPath entries.
+   */
+  pcbPath?: PcbPath;
+}
+```
+
+[Source](https://github.com/tscircuit/props/blob/main/lib/components/antenna.ts)
+
 ### AutoroutingPhaseProps `<autoroutingphase />`
 
 ```ts
@@ -365,20 +381,37 @@ export interface BatteryProps<
 
 ### BoardProps `<board />`
 
-```ts
+````ts
 export interface BoardProps extends Omit<
   SubcircuitGroupProps,
-  "subcircuit" | "connections"
+  "subcircuit" | "connections" | "outline"
 > {
   title?: string;
   material?: "fr4" | "fr1" | "flex";
   /** Number of layers for the PCB */
   layers?: 1 | 2 | 4 | 6 | 8 | 10;
+  /**
+   * Whether the autorouter may generate blind and buried vias. Defaults to
+   * false, which restricts newly generated vias to the full board stack.
+   */
+  allowBlindAndBuriedVias?: boolean;
   borderRadius?: Distance;
   thickness?: Distance;
   boardAnchorPosition?: Point;
   anchorAlignment?: z.infer<typeof ninePointAnchor>;
   boardAnchorAlignment?: z.infer<typeof ninePointAnchor>;
+  /**
+   * Points defining the board edge. Set `isCastellatedHole` on a point to
+   * place a castellated plated hole centered on that location.
+   *
+   * @example
+   * ```tsx
+   * { x: "-5mm", y: 0, isCastellatedHole: true,
+   *   holeDiameter: "0.8mm", padDiameter: "1.2mm",
+   *   connectsTo: "net.GND" }
+   * ```
+   */
+  outline?: BoardOutlinePoint[];
   /** Color applied to both top and bottom solder masks */
   solderMaskColor?: BoardColor;
   /** Color of the top solder mask */
@@ -395,10 +428,15 @@ export interface BoardProps extends Omit<
   doubleSidedAssembly?: boolean;
   /** Whether vias may be placed inside PCB pads */
   isViaInPadAllowed?: boolean;
+  /**
+   * Whether implicit copper pours should be generated automatically. Defaults
+   * to false.
+   */
+  automaticPoursEnabled?: boolean;
   /** Whether this board should be omitted from the schematic view */
   schematicDisabled?: boolean;
 }
-```
+````
 
 [Source](https://github.com/tscircuit/props/blob/main/lib/components/board.ts)
 
@@ -417,6 +455,11 @@ export interface BreakoutProps
   paddingRight?: Distance;
   paddingTop?: Distance;
   paddingBottom?: Distance;
+  /**
+   * Minimum clearance between this fanout boundary and another fanout
+   * boundary. Fanout boundaries may never overlap, even when this is omitted.
+   */
+  fanoutMargin?: Distance;
 }
 ```
 
@@ -452,6 +495,10 @@ export interface BusProps {
   pcbTraceWidth?: number | string;
   /** PCB layers on which the bus may be routed. */
   pcbAllowedLayers?: LayerRefInput[];
+  /** Preferred PCB layer for routing the bus. */
+  preferredLayer?: LayerRefInput;
+  /** Preferred PCB layers for routing the bus, in priority order. */
+  preferredLayers?: LayerRefInput[];
 }
 ```
 
@@ -579,9 +626,14 @@ export interface ChipPropsSU<
 ```ts
 export interface ConnectorProps extends ChipPropsSU {
   /**
-   * Connector standard, e.g. usb_c, m2
+   * Connector interface or product family, e.g. usb_c, m2, jst_ph
    */
-  standard?: "usb_c" | "m2";
+  standard?: ConnectorStandard;
+
+  /**
+   * Number of electrical circuits in the connector
+   */
+  pinCount?: number;
 }
 ```
 
@@ -622,12 +674,17 @@ export interface CopperPourProps {
   name?: string;
   layer: LayerRefInput;
   connectsTo: string;
+  /**
+   * Reserves the pour region during autorouting so unrelated traces do not
+   * split it. Vias may still cross the region using antipads.
+   */
   unbroken?: boolean;
   padMargin?: Distance;
   traceMargin?: Distance;
   clearance?: Distance;
   boardEdgeMargin?: Distance;
   cutoutMargin?: Distance;
+  useThermalReliefs?: boolean;
   outline?: Point[];
   coveredWithSolderMask?: boolean;
 }
@@ -911,6 +968,26 @@ export interface FootprintProps {
    * makes the distinction easy to miss.
    */
   insertionDirection?: FootprintInsertionDirection;
+  /**
+   * Direction the part's enclosure opening faces, named the same way as
+   * `insertionDirection` and in the same unrotated part frame.
+   *
+   * These are two different physical facts and a part may need both. A
+   * side-actuated switch is *installed* from above and *actuated* from the side:
+   * its aperture must pierce a side wall, while nothing is ever inserted into
+   * it. Reusing `insertionDirection` for that would either put the opening on
+   * the wrong face or overload a field documented as "the side exposing the
+   * receptacle where the cable is attached".
+   *
+   * Like `insertionDirection`, this is a property of the part, authored without
+   * regard to placement: rotating or flipping the component rotates it too, and
+   * `pcb_component.cutout_aperture_direction` reports the result in board
+   * coordinates.
+   *
+   * When absent, the aperture falls back to `insertionDirection`, which is
+   * correct for every connector -- a cable enters through the opening it needs.
+   */
+  cutoutApertureDirection?: FootprintInsertionDirection;
 }
 ```
 
@@ -1265,6 +1342,12 @@ export interface NetLabelProps {
   net?: string;
   connection?: string;
   connectsTo?: string | string[];
+  /**
+   * Render the net name along its schematic trace instead of as an anchored
+   * label. Inline placement is automatic, so schematic anchor positioning
+   * props are ignored.
+   */
+  inline?: boolean;
   schX?: number | string;
   schY?: number | string;
   schRotation?: number | string;
@@ -1301,8 +1384,13 @@ export interface PanelProps extends Omit<
    * If true, prevent a solder mask from being applied to this panel.
    */
   noSolderMask?: boolean;
-  /** Method for panelization */
-  panelizationMethod?: "tab-routing" | "none";
+  /**
+   * Method used to separate boards in the panel.
+   *
+   * `outline_routing` creates continuous routed cutouts around each board
+   * outline without tabs.
+   */
+  panelizationMethod?: "tab-routing" | "outline_routing" | "none";
   /** Gap between boards in a panel */
   boardGap?: Distance;
   layoutMode?: "grid" | "pack" | "none";
@@ -1477,6 +1565,27 @@ export interface PinHeaderProps extends CommonComponentProps {
    * Whether the header is male, female, or unpopulated
    */
   gender?: "male" | "female" | "unpopulated";
+
+  /**
+   * Mount the header on the top of the board, so it is connected to from
+   * above. An alias for `layer: "top"`, which is the default.
+   *
+   * Which side of the board a part sits on is `layer`, and only `layer`: the
+   * 3D model is always drawn top-side and consumers flip it for a bottom-layer
+   * component. Prefer these names on a connector, where "which side does the
+   * mating connector come from" is the question actually being asked.
+   */
+  connectsFromAbove?: boolean;
+
+  /**
+   * Mount the header on the underside of the board, so it is connected to from
+   * below. An alias for `layer: "bottom"`.
+   *
+   * Not to be confused with `invert` on a footprint string, which installs a
+   * header BACKWARDS on whichever side it is on — long pins through the board
+   * rather than short ones.
+   */
+  connectsFromBelow?: boolean;
 
   /**
    * Whether to show pin labels in silkscreen
@@ -1675,6 +1784,8 @@ export interface SchematicBoxProps {
   chipRef?: string;
   pinLabels?: PinLabelsProp;
   schPinArrangement?: SchematicPinArrangement;
+  /** Per-pin schematic margin overrides keyed by pin number or label. */
+  schPinStyle?: SchematicPinStyle;
   schX?: Distance;
   schY?: Distance;
   schSectionName?: string;
@@ -1730,6 +1841,26 @@ export interface SchematicCircleProps {
 ```
 
 [Source](https://github.com/tscircuit/props/blob/main/lib/components/schematic-circle.ts)
+
+### SchematicGraphicProps `<schematicgraphic />`
+
+```ts
+export interface SchematicGraphicProps {
+  /** URL or static-file import for the canonical source SVG asset. */
+  imageUrl?: string;
+  /**
+   * Complete SVG markup, including its dimensions or viewBox. Used as the
+   * source when imageUrl is omitted, or as fallback content when both exist.
+   */
+  svgContent?: string;
+  /** Optional rendered width of the graphic. */
+  width?: Distance;
+  /** Optional rendered height of the graphic. */
+  height?: Distance;
+}
+```
+
+[Source](https://github.com/tscircuit/props/blob/main/lib/components/schematic-graphic.ts)
 
 ### SchematicLineProps `<schematicline />`
 
@@ -1812,9 +1943,15 @@ export interface SchematicSectionProps {
 
 ```ts
 export interface SchematicSheetProps {
-  name: string;
-  displayName: string;
+  name?: string;
+  displayName?: string;
   sheetIndex?: number;
+  /** Sheet size used to render the schematic. Defaults to A4. */
+  sheetSize?: SchematicSheetSize;
+  /** Explicit schematic sheet width. Overrides the width from sheetSize. */
+  sheetWidth?: Distance;
+  /** Explicit schematic sheet height. Overrides the height from sheetSize. */
+  sheetHeight?: Distance;
   children?: any;
 }
 ```
